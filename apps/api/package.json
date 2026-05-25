@@ -1,0 +1,18 @@
+{
+  "name": "@zelos/api",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "dependencies": {
+    "@zelos/db":"workspace:*",
+    "@zelos/shared-types": "workspace:*",
+    "express":"^5.2.1",
+    "zod":"^4.4.3"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}
