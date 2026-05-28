@@ -2,11 +2,9 @@
   "name": "@zelos/game",
   "module": "index.ts",
   "type": "module",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
-  "peerDependencies": {
-    "typescript": "^5"
+  "dependencies": {
+    "@zelos/db": "workspace:*",
+    "@zelos/shared-types": "workspace:*",
+    "ioredis": "^5.11.0"
   }
 }

@@ -1,7 +1,5 @@
 {
   "name": "zelos",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
   "workspaces": [
     "apps/*",
@@ -11,6 +9,6 @@
     "@types/bun": "latest"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.0.0"
   }
 }

@@ -1,4 +1,4 @@
-# worker
+# packages
 
 To install dependencies:
 
