@@ -2,6 +2,9 @@
   "name": "@zelos/api",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+    "dev": "bun ./src/server.ts"
+  },
   "dependencies": {
     "@zelos/db": "workspace:*",
     "@zelos/shared-types": "workspace:*",
@@ -9,7 +12,8 @@
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
-    "pino-http": "^11.0.0"
+    "pino-http": "^11.0.0",
+    "pino-pretty": "^10.0.0"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
