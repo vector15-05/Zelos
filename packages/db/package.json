@@ -3,6 +3,7 @@
   "module": "index.ts",
   "type": "module",
   "dependencies": {
+    "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "postgres": "^3.4.9"
   },
