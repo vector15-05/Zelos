@@ -11,6 +11,10 @@ import quizRouter from './routes/quizRoutes';
 import authRouter from './routes/authRoutes';
 import cookieParser from 'cookie-parser';
 
+import { createServer } from "http";
+import { WebSocketServer } from "ws";
+import { gameHandler, handleDisconnect } from './sockets/gameHandler';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -66,16 +70,31 @@ app.get("/health", (req, res) => {
 app.use("/api/auth", authRouter);
 app.use("/api/quizzes", quizRouter);
 
-// Fallback for unmatched routes. Use `app.use` to avoid potential path-to-regexp
-// issues in some environments when using a wildcard path string.
+// Fallback for unmatched routes.
 app.use((req, res, next) => {
     next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
 });
 
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+// For the game engine
+const server = createServer(app);
+const ws = new WebSocketServer({ server });
+ws.on("connection", (socket) => {
+    console.log("New WebSocket connection established");
+
+    socket.on("message", async (message) => {
+        await gameHandler(socket, message.toString());
+    });
+
+    socket.on("close", () => {
+        console.log("WebSocket connection closed");
+        handleDisconnect(socket);
+    });
+});
+
+server.listen(PORT, () => {
     console.log(`Zelos API is running on port ${PORT}`);
-}); 
+});
 
 export default app;
