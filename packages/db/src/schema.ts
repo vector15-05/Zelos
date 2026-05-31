@@ -1,7 +1,7 @@
-import {pgTable, text, integer, timestamp, uuid, jsonb, varchar} from "drizzle-orm/pg-core";
-import {relations} from "drizzle-orm";
+import { pgTable, text, integer, timestamp, uuid, jsonb, varchar } from "drizzle-orm/pg-core";
+import { relations } from "drizzle-orm";
 
-export const users = pgTable("users",{
+export const users = pgTable("users", {
     id: uuid("id").defaultRandom().primaryKey(),
     name: varchar("name", { length: 256 }).notNull(),
     email: text("email").notNull().unique(),
@@ -37,6 +37,22 @@ export const questions = pgTable("questions", {
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
 })
+
+export const gameSessions = pgTable("game_sessions", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    quizId: uuid("quiz_id").notNull().references(() => quizzes.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export const playerScores = pgTable("player_scores", {
+    id: uuid("id").primaryKey().defaultRandom(),
+    sessionId: uuid("session_id").references(() => gameSessions.id).notNull(),
+    playerName: varchar("player_name", { length: 255 }).notNull(),
+    score: integer("score").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
 
 export const userRelations = relations(users, ({ many }) => ({
     quizzes: many(quizzes),
