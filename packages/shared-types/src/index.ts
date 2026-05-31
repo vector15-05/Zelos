@@ -9,7 +9,7 @@ export const OptionSchema = z.object({
 export const QuestionSchema = z.object({
     questionText: z.string().min(3,"Question text no empty gang").max(512,"Question text too long gang"),
     timeLimit: z.number().int().positive().min(5,"Time limit too short gang").max(512,"Time limit too long gang").default(30),
-    sortOrder: z.number().int().nonnegative(),
+    sortOrder: z.number().int().nonnegative().optional(),
     options: z.array(OptionSchema).min(2,"At least 2 options gang"),
 })
 

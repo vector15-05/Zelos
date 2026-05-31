@@ -22,13 +22,13 @@ export const createQuiz = async (
                 .values({
                     title: quizData.title,
                     description: quizData.description,
-                    userId: targetUser.id,
+                    creatorId: targetUser.id,
                 })
                 .returning();
 
             const questionsToInsert = quizData.questions.map((q, index) => ({
-                quizId: insertedQuiz.id,
-                text: q.questionText,
+                quizId: insertedQuiz!.id,
+                questionText: q.questionText,
                 timeLimit: q.timeLimit,
                 sortOrder: index,
                 options: q.options,
