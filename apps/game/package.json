@@ -2,6 +2,13 @@
   "name": "@zelos/game",
   "module": "index.ts",
   "type": "module",
+  "exports": {
+    ".": {
+      "import": "./src/server.ts",
+      "types": "./src/server.ts",
+      "default": "./src/server.ts"
+    }
+  },
   "dependencies": {
     "@zelos/db": "workspace:*",
     "@zelos/shared-types": "workspace:*",

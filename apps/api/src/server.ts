@@ -7,6 +7,8 @@ import rateLimit from 'express-rate-limit';
 import { errorHandler } from './middlewares/errorHandler';
 import { AppError } from './utils/AppError';
 
+import quizRouter from './routes/quizRoutes';
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -26,7 +28,7 @@ try {
         }
     }));
 } catch (err) {
-    console.warn('pino transport failed, falling back to default logger:', err?.message || err);
+    console.warn('pino transport failed, falling back to default logger:', err);
     app.use(pinoHttp({ level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' }));
 }
 
@@ -57,6 +59,8 @@ app.get("/health", (req, res) => {
     res.status(200).json({ status: "success", message: "Zelos API is alive and kicking. Lets GO!!!!" });
 });
 
+app.use("/api/quizzes", quizRouter);
+
 // Fallback for unmatched routes. Use `app.use` to avoid potential path-to-regexp
 // issues in some environments when using a wildcard path string.
 app.use((req, res, next) => {
@@ -64,6 +68,8 @@ app.use((req, res, next) => {
 });
 
 app.use(errorHandler);
+
+app.use(quizRouter);
 
 app.listen(PORT, () => {
     console.log(`Zelos API is running on port ${PORT}`);
