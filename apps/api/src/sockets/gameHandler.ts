@@ -1,8 +1,41 @@
 import { WebSocket } from "ws";
 import { RoomManager } from "../services/RoomManager";
+import { db, gameSessions, playerScores } from "@zelos/db";
 
 const hostConnections = new Map<string, WebSocket>();
 const playerConnections = new Map<string, Set<WebSocket>>();
+
+const roomTimers = new Map<string, NodeJS.Timeout>();
+const roomState = new Map<string, { isAcceptingAnswers: boolean }>();
+
+const startQuestionTimer = (pin: string, timeLimit: number) => {
+    roomState.set(pin, { isAcceptingAnswers: true });
+
+    if (roomTimers.has(pin)) clearTimeout(roomTimers.get(pin)!);
+
+    const timer = setTimeout(async () => {
+        roomState.set(pin, { isAcceptingAnswers: false });
+        console.log(`Time is up for room ${pin}! Locking answers.`);
+
+        const leaderboard = await RoomManager.getLeaderboard(pin);
+        const payload = JSON.stringify({ event: "leaderboard_updated", leaderboard });
+
+        const hostSocket = hostConnections.get(pin);
+        if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
+            hostSocket.send(payload);
+        }
+
+        const playersInRoom = playerConnections.get(pin);
+        if (playersInRoom) {
+            playersInRoom.forEach((playerSocket) => {
+                if (playerSocket.readyState === WebSocket.OPEN) {
+                    playerSocket.send(payload);
+                }
+            });
+        }
+    }, timeLimit * 1000); // seconds -> milliseconds
+    roomTimers.set(pin, timer);
+};
 
 export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
     try {
@@ -68,19 +101,25 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     return;
                 }
 
-                const questionPayload = {
-                    event: "question_active",
-                    questionText: "Which F1 team has won the most Constructors' Championships?",
-                    timeLimit: 30,
-                    options: [
-                        { id: 1, text: "Mercedes" },
-                        { id: 2, text: "Red Bull" },
-                        { id: 3, text: "Ferrari" },
-                        { id: 4, text: "McLaren" }
-                    ]
-                };
+                const firstQuestion = await RoomManager.getQuestion(pin, 0);
 
-                ws.send(JSON.stringify(questionPayload));
+                if (!firstQuestion) {
+                    ws.send(JSON.stringify({ event: "error", message: "Failed to load questions from cache" }));
+                    break;
+                }
+
+                const timeLimit = firstQuestion.timeLimit || 30;
+
+                const questionPayload = JSON.stringify({
+                    event: "question_active",
+                    questionNumber: 1,
+                    questionText: firstQuestion.text,
+                    timeLimit: firstQuestion.timeLimit || 30,
+                    options: firstQuestion.options
+                });
+
+                ws.send(questionPayload);
+
                 const playersInRoom = playerConnections.get(pin);
                 if (playersInRoom) {
                     playersInRoom.forEach((playerSocket) => {
@@ -90,20 +129,29 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     });
                 }
 
+                startQuestionTimer(pin, timeLimit);
+
 
                 break;
             }
 
             case "SUBMIT_ANSWER": {
-                const { pin, playerName, answerId, timeTaken } = message;
+                const { pin, playerName, answerId, timeTaken, questionNumber } = message;
 
                 if (!pin || !playerName || answerId === undefined) {
                     ws.send(JSON.stringify({ event: "error", message: "Missing answer data" }));
                     break;
                 }
 
-                const isCorrect = answerId === 3;
+                const currentQ = await RoomManager.getQuestion(pin, questionNumber - 1);
+                const isCorrect = currentQ && answerId === currentQ.correctOptionId;
                 let points = 0;
+
+                const state = roomState.get(pin);
+                if (!state || !state.isAcceptingAnswers) {
+                    ws.send(JSON.stringify({ event: "error", message: "Time is up! No points awarded." }));
+                    break;
+                }
 
                 if (isCorrect) {
                     // Standard Kahoot-style formula: Base 500 + up to 500 more for speed (assuming 30s max)
@@ -168,12 +216,22 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     break;
                 }
 
+                const nextIndex = message.questionNumber - 1;
+                const nextQ = await RoomManager.getQuestion(pin, nextIndex);
+
+                if (!nextQ) {
+                    ws.send(JSON.stringify({ event: "quiz_completed" }));
+                    break;
+                }
+
+                const timeLimit = nextQ.timeLimit || 30;
+
                 const questionPayload = JSON.stringify({
                     event: "question_active",
-                    questionNumber: message.questionNumber,
-                    questionText: message.questionText,
-                    timeLimit: message.timeLimit || 30,
-                    options: message.options
+                    questionNumber: nextQ.questionNumber,
+                    questionText: nextQ.questionText,
+                    timeLimit: nextQ.timeLimit || 30,
+                    options: nextQ.options
                 });
 
                 ws.send(questionPayload);
@@ -186,6 +244,60 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                         }
                     });
                 }
+
+                startQuestionTimer(pin, timeLimit);
+                break;
+            }
+
+            case "END_GAME": {
+                const pin = message.pin;
+
+                if (hostConnections.get(pin) !== ws) {
+                    ws.send(JSON.stringify({ event: "error", message: "Only the host can end the game" }));
+                    break;
+                }
+
+                const finalLeaderboard = await RoomManager.getLeaderboard(pin);
+                const quizId = await RoomManager.getQuizId(pin);
+                const payload = JSON.stringify({
+                    event: "game_over",
+                    leaderboard: finalLeaderboard
+                });
+
+                ws.send(payload);
+                const playersInRoom = playerConnections.get(pin);
+                if (playersInRoom) {
+                    playersInRoom.forEach((playerSocket) => {
+                        if (playerSocket.readyState === WebSocket.OPEN) playerSocket.send(payload);
+                    });
+                }
+
+                if (quizId && finalLeaderboard.length > 0) {
+                    try {
+                        const [session] = await db.insert(gameSessions).values({
+                            quizId: quizId
+                        }).returning();
+
+                        const scoresToInsert = finalLeaderboard.map((player) => ({
+                            sessionId: session!.id,
+                            playerName: player.name,
+                            score: player.score
+                        }));
+
+                        await db.insert(playerScores).values(scoresToInsert);
+                        console.log(`Final scores saved to Postgres for session ${session!.id}`);
+                    } catch (error) {
+                        console.error(" Failed to save to Postgres:", error);
+                    }
+                }
+
+                await RoomManager.deleteRoom(pin); // Nuke from Redis
+
+                ws.close(1000, "Game Ended");
+                if (playersInRoom) {
+                    playersInRoom.forEach((playerSocket) => playerSocket.close(1000, "Game Ended"));
+                }
+
                 break;
             }
             default:
@@ -205,8 +317,13 @@ export const handleDisconnect = (ws: WebSocket) => {
     for (const [pin, socket] of hostConnections.entries()) {
         if (socket === ws) {
             hostConnections.delete(pin); // early exit
-            console.log(`Host for room ${pin} disconnected. Room closed.`);
-            break;
+            if (roomTimers.has(pin)) {
+                clearTimeout(roomTimers.get(pin)!);
+                roomTimers.delete(pin);
+            }
+
+            console.log(`Cleaned up dead Host connection for room ${pin}`);
+            return;
         }
     }
 

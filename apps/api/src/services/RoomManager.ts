@@ -1,4 +1,5 @@
 import { redis } from "../config/redis";
+import { db, questions, eq } from "@zelos/db";
 
 export class RoomManager {
     // Random 5 digit pin
@@ -17,11 +18,25 @@ export class RoomManager {
             return this.createRoom(quizId);
         }
 
-        const leaderboardKey = `room:${pin}:leaderboard`;
+        const quizQuestions = await db.select()
+            .from(questions)
+            .where(eq(questions.quizId, quizId));
 
-        await redis.set(roomKey, quizId, "EX", 7200); // timelimit: 2 hrs
+        if (quizQuestions.length === 0) {
+            throw new Error("Cannot start a room with an empty quiz.");
+        }
 
+        await redis.set(`room:${pin}:quiz`, quizId, "EX", 7200);
+        await redis.set(`room:${pin}:questions`, JSON.stringify(quizQuestions), "EX", 7200);
         return pin;
+    }
+
+    static async getQuestion(pin: string, questionIndex: number) {
+        const questionsJson = await redis.get(`room:${pin}:questions`);
+        if (!questionsJson) return null;
+
+        const parsedQuestions = JSON.parse(questionsJson);
+        return parsedQuestions[questionIndex] || null; 
     }
 
     static async joinRoom(pin: string, playerName: string): Promise<boolean> {
@@ -66,6 +81,12 @@ export class RoomManager {
         }
         return formatted;
     }
+    static async getQuizId(pin: string) {
+        return await redis.get(`room:${pin}:quiz`);
+    }
 
+    static async deleteRoom(pin: string) {
+        await redis.del(`room:${pin}:quiz`, `room:${pin}:questions`, `room:${pin}:players`, `room:${pin}:leaderboard`);
+    }
 
 }
