@@ -36,7 +36,7 @@ export class RoomManager {
         if (!questionsJson) return null;
 
         const parsedQuestions = JSON.parse(questionsJson);
-        return parsedQuestions[questionIndex] || null; 
+        return parsedQuestions[questionIndex] || null;
     }
 
     static async joinRoom(pin: string, playerName: string): Promise<boolean> {
@@ -87,6 +87,11 @@ export class RoomManager {
 
     static async deleteRoom(pin: string) {
         await redis.del(`room:${pin}:quiz`, `room:${pin}:questions`, `room:${pin}:players`, `room:${pin}:leaderboard`);
+    }
+
+    static async hasPlayer(pin: string, playerName: string) {
+        const exists = await redis.sismember(`room:${pin}:players`, playerName); // checks the set in O(1) time
+        return exists === 1;
     }
 
 }

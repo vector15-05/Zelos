@@ -2,45 +2,66 @@ import { WebSocket } from "ws";
 import { RoomManager } from "../services/RoomManager";
 import { db, gameSessions, playerScores } from "@zelos/db";
 
+import { z } from "zod";
+
+const EventSchema = z.object({
+    action: z.string(),
+    pin: z.string().optional(),
+    playerName: z.string().optional(),
+    quizId: z.string().optional(),
+    answerId: z.number().optional(),
+    timeTaken: z.number().optional(),
+    questionNumber: z.number().optional(),
+}).passthrough();
+
 const hostConnections = new Map<string, WebSocket>();
 const playerConnections = new Map<string, Set<WebSocket>>();
 
 const roomTimers = new Map<string, NodeJS.Timeout>();
-const roomState = new Map<string, { isAcceptingAnswers: boolean }>();
+const roomState = new Map<string, {
+    isAcceptingAnswers: boolean;
+    currentQuestionNumber: number;
+    expiresAt: number; // Unix timestamp of when the timer hits zero
+}>();
 
-const startQuestionTimer = (pin: string, timeLimit: number) => {
-    roomState.set(pin, { isAcceptingAnswers: true });
+const startQuestionTimer = (pin: string, timeLimit: number, questionNumber: number) => {
+    roomState.set(pin, {
+        isAcceptingAnswers: true,
+        currentQuestionNumber: questionNumber,
+        expiresAt: Date.now() + (timeLimit * 1000)
+    });
 
     if (roomTimers.has(pin)) clearTimeout(roomTimers.get(pin)!);
 
     const timer = setTimeout(async () => {
-        roomState.set(pin, { isAcceptingAnswers: false });
-        console.log(`Time is up for room ${pin}! Locking answers.`);
+        roomState.set(pin, { ...roomState.get(pin)!, isAcceptingAnswers: false });
 
         const leaderboard = await RoomManager.getLeaderboard(pin);
         const payload = JSON.stringify({ event: "leaderboard_updated", leaderboard });
 
         const hostSocket = hostConnections.get(pin);
-        if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
-            hostSocket.send(payload);
-        }
+        if (hostSocket && hostSocket.readyState === WebSocket.OPEN) hostSocket.send(payload);
 
         const playersInRoom = playerConnections.get(pin);
         if (playersInRoom) {
-            playersInRoom.forEach((playerSocket) => {
-                if (playerSocket.readyState === WebSocket.OPEN) {
-                    playerSocket.send(payload);
-                }
-            });
+            playersInRoom.forEach((p) => p.readyState === WebSocket.OPEN && p.send(payload));
         }
-    }, timeLimit * 1000); // seconds -> milliseconds
+    }, timeLimit * 1000);
+
     roomTimers.set(pin, timer);
 };
 
 export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
+    let message;
     try {
-        const message = JSON.parse(rawMessage);
-
+        try {
+            const parsedJson = JSON.parse(rawMessage);
+            message = EventSchema.parse(parsedJson);
+        } catch (error) {
+            console.error("Blocked invalid payload");
+            ws.send(JSON.stringify({ event: "error", message: "Invalid payload format" }));
+            return; // Kill the execution immediately
+        }
         switch (message.action) {
             case "CREATE_ROOM": {
                 if (!message.quizId) throw new Error("Missing quizId");
@@ -93,7 +114,11 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
             }
             case "START_GAME": {
                 const pin = message.pin;
-                if (hostConnections.get(pin) !== ws) {
+                if (!pin) {
+                    ws.send(JSON.stringify({ event: "error", message: "Missing PIN" }));
+                    break;
+                }
+                if (hostConnections.get(pin!) !== ws) {
                     ws.send(JSON.stringify({
                         event: "error",
                         message: "Only the host can start the game"
@@ -101,7 +126,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     return;
                 }
 
-                const firstQuestion = await RoomManager.getQuestion(pin, 0);
+                const firstQuestion = await RoomManager.getQuestion(pin!, 0);
 
                 if (!firstQuestion) {
                     ws.send(JSON.stringify({ event: "error", message: "Failed to load questions from cache" }));
@@ -120,7 +145,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
                 ws.send(questionPayload);
 
-                const playersInRoom = playerConnections.get(pin);
+                const playersInRoom = playerConnections.get(pin!);
                 if (playersInRoom) {
                     playersInRoom.forEach((playerSocket) => {
                         if (playerSocket.readyState === WebSocket.OPEN) {
@@ -129,7 +154,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     });
                 }
 
-                startQuestionTimer(pin, timeLimit);
+                startQuestionTimer(pin!, timeLimit, 1);
 
 
                 break;
@@ -143,7 +168,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     break;
                 }
 
-                const currentQ = await RoomManager.getQuestion(pin, questionNumber - 1);
+                const currentQ = await RoomManager.getQuestion(pin!, questionNumber! - 1);
                 const isCorrect = currentQ && answerId === currentQ.correctOptionId;
                 let points = 0;
 
@@ -155,11 +180,11 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
                 if (isCorrect) {
                     // Standard Kahoot-style formula: Base 500 + up to 500 more for speed (assuming 30s max)
-                    const speedBonus = Math.max(0, 500 * (1 - (timeTaken / 30)));
+                    const speedBonus = Math.max(0, 500 * (1 - (timeTaken! / 30)));
                     points = Math.round(500 + speedBonus);
                 }
 
-                await RoomManager.submitScore(pin, playerName, points);
+                await RoomManager.submitScore(pin!, playerName, points);
 
                 ws.send(JSON.stringify({
                     event: "answer_received",
@@ -167,7 +192,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     pointsEarned: points
                 }));
 
-                const hostSocket = hostConnections.get(pin);
+                const hostSocket = hostConnections.get(pin!);
                 if (hostSocket && hostSocket.readyState === WebSocket.OPEN) {
                     hostSocket.send(JSON.stringify({
                         event: "player_answered",
@@ -180,14 +205,18 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
             case "SHOW_LEADERBOARD": {
                 const pin = message.pin;
-                if (hostConnections.get(pin) !== ws) {
+                if (!pin) {
+                    ws.send(JSON.stringify({ event: "error", message: "Missing PIN" }));
+                    break;
+                }
+                if (hostConnections.get(pin!) !== ws) {
                     ws.send(JSON.stringify({
                         event: "error",
                         message: "Only the host can view the leaderboard"
                     }));
                     break;
                 }
-                const leaderboard = await RoomManager.getLeaderboard(pin);
+                const leaderboard = await RoomManager.getLeaderboard(pin!);
 
 
                 const payload = {
@@ -197,7 +226,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
                 ws.send(JSON.stringify(payload));
 
-                const playersInRoom = playerConnections.get(pin);
+                const playersInRoom = playerConnections.get(pin!);
                 if (playersInRoom) {
                     playersInRoom.forEach((playerSocket) => {
                         if (playerSocket.readyState === WebSocket.OPEN) {
@@ -210,14 +239,18 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
             case "NEXT_QUESTION": {
                 const pin = message.pin;
+                if (!pin || message.questionNumber === undefined) {
+                    ws.send(JSON.stringify({ event: "error", message: "Missing PIN or Question Number" }));
+                    break;
+                }
 
-                if (hostConnections.get(pin) !== ws) {
+                if (hostConnections.get(pin!) !== ws) {
                     ws.send(JSON.stringify({ event: "error", message: "Only the host can trigger the next question" }));
                     break;
                 }
 
-                const nextIndex = message.questionNumber - 1;
-                const nextQ = await RoomManager.getQuestion(pin, nextIndex);
+                const nextIndex = message.questionNumber! - 1;
+                const nextQ = await RoomManager.getQuestion(pin!, nextIndex);
 
                 if (!nextQ) {
                     ws.send(JSON.stringify({ event: "quiz_completed" }));
@@ -236,7 +269,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
 
                 ws.send(questionPayload);
 
-                const playersInRoom = playerConnections.get(pin);
+                const playersInRoom = playerConnections.get(pin!);
                 if (playersInRoom) {
                     playersInRoom.forEach((playerSocket) => {
                         if (playerSocket.readyState === WebSocket.OPEN) {
@@ -245,27 +278,77 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     });
                 }
 
-                startQuestionTimer(pin, timeLimit);
+                startQuestionTimer(pin!, timeLimit, nextQ.questionNumber! + 1);
+                break;
+            }
+
+            case "RECONNECT": {
+                const { pin, playerName } = message;
+                if (!pin || !playerName) {
+                    ws.send(JSON.stringify({ event: "error", message: "Missing reconnection data" }));
+                    break;
+                }
+
+                const isValidPlayer = await RoomManager.hasPlayer(pin, playerName);
+                if (!isValidPlayer) {
+                    ws.send(JSON.stringify({ event: "error", message: "Session expired or room closed." }));
+                    break;
+                }
+
+                let room = playerConnections.get(pin);
+                if (!room) {
+                    room = new Set();
+                    playerConnections.set(pin, room);
+                }
+                room.add(ws);
+
+                const state = roomState.get(pin);
+
+                if (!state) {
+                    ws.send(JSON.stringify({ event: "reconnected", status: "waiting_in_lobby" }));
+                    break;
+                }
+
+                const currentQ = await RoomManager.getQuestion(pin, state.currentQuestionNumber - 1);
+
+                if (currentQ && state.isAcceptingAnswers) {
+                    const timeLeft = Math.max(0, Math.floor((state.expiresAt - Date.now()) / 1000));
+
+                    ws.send(JSON.stringify({
+                        event: "question_active",
+                        questionNumber: state.currentQuestionNumber,
+                        questionText: currentQ.text,
+                        timeLimit: timeLeft,
+                        options: currentQ.options
+                    }));
+                } else {
+                    const leaderboard = await RoomManager.getLeaderboard(pin);
+                    ws.send(JSON.stringify({ event: "leaderboard_updated", leaderboard }));
+                }
                 break;
             }
 
             case "END_GAME": {
                 const pin = message.pin;
+                if (!pin) {
+                    ws.send(JSON.stringify({ event: "error", message: "Missing PIN" }));
+                    break;
+                }
 
-                if (hostConnections.get(pin) !== ws) {
+                if (hostConnections.get(pin!) !== ws) {
                     ws.send(JSON.stringify({ event: "error", message: "Only the host can end the game" }));
                     break;
                 }
 
-                const finalLeaderboard = await RoomManager.getLeaderboard(pin);
-                const quizId = await RoomManager.getQuizId(pin);
+                const finalLeaderboard = await RoomManager.getLeaderboard(pin!);
+                const quizId = await RoomManager.getQuizId(pin!);
                 const payload = JSON.stringify({
                     event: "game_over",
                     leaderboard: finalLeaderboard
                 });
 
                 ws.send(payload);
-                const playersInRoom = playerConnections.get(pin);
+                const playersInRoom = playerConnections.get(pin!);
                 if (playersInRoom) {
                     playersInRoom.forEach((playerSocket) => {
                         if (playerSocket.readyState === WebSocket.OPEN) playerSocket.send(payload);
@@ -291,7 +374,7 @@ export const gameHandler = async (ws: WebSocket, rawMessage: string) => {
                     }
                 }
 
-                await RoomManager.deleteRoom(pin); // Nuke from Redis
+                await RoomManager.deleteRoom(pin!); // Nuke from Redis
 
                 ws.close(1000, "Game Ended");
                 if (playersInRoom) {
