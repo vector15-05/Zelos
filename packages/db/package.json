@@ -2,6 +2,18 @@
   "name": "@zelos/db",
   "module": "index.ts",
   "type": "module",
+  "scripts": {
+  "generate": "drizzle-kit generate --out ./drizzle --schema ./src/schema.ts --dialect=postgresql",
+  "migrate": "bun --env-file=../../.env run ./src/migration.ts",
+  "seed": "bun --env-file=../../.env run ./src/seed.ts"
+},
+  "exports": {
+    ".": {
+      "import": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
   "dependencies": {
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
