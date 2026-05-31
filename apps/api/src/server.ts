@@ -8,6 +8,8 @@ import { errorHandler } from './middlewares/errorHandler';
 import { AppError } from './utils/AppError';
 
 import quizRouter from './routes/quizRoutes';
+import authRouter from './routes/authRoutes';
+import cookieParser from 'cookie-parser';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -43,6 +45,7 @@ app.use(cors({
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use(cookieParser());
 
 // rate limiting ftw
 const limiter = rateLimit({
@@ -59,6 +62,8 @@ app.get("/health", (req, res) => {
     res.status(200).json({ status: "success", message: "Zelos API is alive and kicking. Lets GO!!!!" });
 });
 
+// Application's own routes
+app.use("/api/auth", authRouter);
 app.use("/api/quizzes", quizRouter);
 
 // Fallback for unmatched routes. Use `app.use` to avoid potential path-to-regexp
@@ -68,8 +73,6 @@ app.use((req, res, next) => {
 });
 
 app.use(errorHandler);
-
-app.use(quizRouter);
 
 app.listen(PORT, () => {
     console.log(`Zelos API is running on port ${PORT}`);
