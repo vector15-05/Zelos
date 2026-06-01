@@ -135,11 +135,11 @@ Seamlessly drops a disconnected player back into the live match, providing them 
 2.  **Push the Schema:** 
 ```bash
     bun run db:push
-    ```
+```
 3.  **Boot the Engine:**
 ```bash
     bun run dev
-    ```
+ ```
 
 ---
 
